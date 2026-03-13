@@ -118,3 +118,78 @@ def delete_project(
             detail=f"An internal server error occurred while deleting project: {str(e)}"
         )
 
+
+@router.get("/api/projects/{project_id}")
+async def get_project(
+    project_id: str, 
+    clerk_id: str = Depends(get_current_user)
+):
+    try:
+        result = supabase.table("projects").select("*").eq("id", project_id).eq("clerk_id", clerk_id).execute()
+
+        if not result.data:
+            raise HTTPException(
+                status_code=404, 
+                detail="Project not found or you don't have permission to access it"
+            )
+
+        return {
+            "success": True,
+            "message": "Project retrieved successfully", 
+            "data": result.data[0]
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"An internal server error occurred while retrieving project: {str(e)}"
+        )
+
+
+@router.get("/api/projects/{project_id}/chats")
+async def get_project_chats(
+    project_id: str, 
+    clerk_id: str = Depends(get_current_user)
+):
+    try:
+        result = supabase.table("chats").select("*").eq("project_id", project_id).eq("clerk_id", clerk_id).order("created_at", desc=True).execute()
+
+        return {
+            "success": True,
+            "message": "Project chats retrieved successfully", 
+            "data": result.data or []
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"An internal server error occurred while retrieving project chats: {str(e)}"
+        )
+    
+
+@router.get("/api/projects/{project_id}/settings")
+async def get_project_settings(
+    project_id: str, 
+    clerk_id: str = Depends(get_current_user)
+):
+    try:
+        settings_result = supabase.table("project_settings").select("*").eq("project_id", project_id).execute()
+
+        if not settings_result.data:
+            raise HTTPException(
+                status_code=404, 
+                detail="Project settings not found"
+            )
+
+        return {
+            "success": True,
+            "message": "Project settings retrieved successfully", 
+            "data": settings_result.data[0]
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"An internal server error occurred while retrieving project settings: {str(e)}"
+        )
+
