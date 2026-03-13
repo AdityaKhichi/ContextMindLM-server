@@ -73,9 +73,7 @@ async def create_user_from_clerk_webhook(clerk_webhook_data: dict):
             "message": "User created successfully",
             "user": result.data[0]
         }
-        
-    except HTTPException:
-        raise
+    
     except Exception as e:
         # Only catch unexpected exceptions (database errors, network errors, etc.)
         raise HTTPException(
