@@ -130,9 +130,18 @@ async def send_message(
 
         
         # Generate query embedding
-        # Perform vector search using the RPC function 
-        chunks = vector_search(message, document_ids, settings)
-        print(f"✅ Retrieved {len(chunks)} relevant chunks from vector search")
+        strategy = settings['rag_strategy']
+        print(f"\n🔍 RAG STRATEGY: {strategy.upper()}")
+        
+        # Perform search using PostgreSQL functions 
+        if strategy == 'basic':
+            chunks = vector_search(message, document_ids, settings) 
+            print(f"✅ Retrieved {len(chunks)} relevant chunks from vector search") 
+
+        elif strategy == 'hybrid':
+            print("📈 Executing: Hybrid Search (Vector + Keyword)") 
+            chunks = hybrid_search(message, document_ids, settings)
+            print(f"📈 Hybrid search returned: {len(chunks)} chunks")
 
 
         # Build context from retrieved chunks
@@ -210,6 +219,63 @@ def vector_search(query: str, document_ids: List[str], settings: dict) -> List[D
     }).execute()
     
     return result.data if result.data else []
+
+
+def hybrid_search(query: str, document_ids: List[str], settings: dict) -> List[Dict]:
+    """Execute hybrid search by combining vector and keyword results"""
+    # Get results from both search methods
+    vector_results = vector_search(query, document_ids, settings)
+    keyword_results = keyword_search(query, document_ids, settings)
+
+    print(f"📈 Vector search returned: {len(vector_results)} chunks")
+    print(f"📈 Keyword search returned: {len(keyword_results)} chunks")
+    
+    # Combine using RRF with configured weights
+    return rrf_rank_and_fuse(
+        [vector_results, keyword_results], 
+        [settings['vector_weight'], settings['keyword_weight']]
+    )
+
+
+def keyword_search(query: str, document_ids: List[str], settings: dict) -> List[Dict]:
+    result = supabase.rpc('keyword_search_document_chunks', {
+        'query_text': query,
+        'filter_document_ids': document_ids,
+        'chunks_per_search': settings['chunks_per_search']
+    }).execute()
+    
+    return result.data if result.data else []
+
+
+def rrf_rank_and_fuse(search_results_list: List[List[Dict]], weights: List[float] = None, k: int = 60) -> List[Dict]:
+    """RRF (Reciprocal Rank Fusion) ranking"""
+    if not search_results_list or not any(search_results_list):
+        return []
+    
+    if weights is None:
+        weights = [1.0 / len(search_results_list)] * len(search_results_list)
+    
+    chunk_scores = {}
+    all_chunks = {}
+    
+    for search_idx, results in enumerate(search_results_list):
+        weight = weights[search_idx]
+        
+        for rank, chunk in enumerate(results):
+            chunk_id = chunk.get('id')
+            if not chunk_id:
+                continue
+            
+            rrf_score = weight * (1.0 / (k + rank + 1))
+            
+            if chunk_id in chunk_scores:
+                chunk_scores[chunk_id] += rrf_score
+            else:
+                chunk_scores[chunk_id] = rrf_score
+                all_chunks[chunk_id] = chunk
+    
+    sorted_chunk_ids = sorted(chunk_scores.keys(), key=lambda cid: chunk_scores[cid], reverse=True)
+    return [all_chunks[chunk_id] for chunk_id in sorted_chunk_ids]
 
 
 def build_context(chunks: List[Dict]) -> Tuple[List[str], List[str], List[str], List[Dict]]:
