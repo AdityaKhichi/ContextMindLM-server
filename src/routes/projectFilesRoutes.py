@@ -1,25 +1,22 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from database import BUCKET_NAME, supabase, s3_client
-from auth import get_current_user
-from tasks import process_document
+
+from src.services.clerkAuth import get_current_user
+from src.services.supabase import supabase
+from src.services.awsS3 import s3_client
+from src.services.celery import process_document_ingestion
+
+from src.models.index import FileUploadRequest, ProcessingStatus, UrlAddRequest
+from src.config.index import appConfig
+from src.utils.index import validate_url
 
 router = APIRouter(
     tags=["files"]
-)  
-
-class FileUploadRequest(BaseModel):
-    filename: str
-    file_size: int
-    file_type: str
-
-class UrlAddRequest(BaseModel):
-    url: str    
+)
 
 
-@router.get("/api/projects/{project_id}/files")
+@router.get("/{project_id}/files")
 async def get_project_files(
     project_id: str, 
     clerk_id: str = Depends(get_current_user)
@@ -33,11 +30,11 @@ async def get_project_files(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail = f"Failed to get project files: {str(e)}")
+        raise HTTPException(status_code=500, detail = f"An internal server error occurred while retrieving project {project_id} files: {str(e)}")
 
 
-@router.post("/api/projects/{project_id}/files/upload-url")
-async def get_upload_url(
+@router.post("/{project_id}/files/upload-url")
+async def get_upload_presigned_url(
     project_id: str, 
     file_request: FileUploadRequest, 
     clerk_id: str = Depends(get_current_user)
@@ -47,7 +44,7 @@ async def get_upload_url(
         projects_result = supabase.table("projects").select("id").eq("id", project_id).eq("clerk_id", clerk_id).execute()
 
         if not projects_result.data:
-            raise HTTPException(status_code=400, detail="Project not found or access denied")
+            raise HTTPException(status_code=400, detail="Project not found or you don't have permission to upload files to this project")
         
         # Generate unique S3 key
         file_extension = file_request.filename.split('.')[-1] if '.' in file_request.filename else ''
@@ -58,12 +55,18 @@ async def get_upload_url(
         presigned_url = s3_client.generate_presigned_url(
             'put_object',
             Params={
-                'Bucket': BUCKET_NAME,
+                'Bucket': appConfig["s3_bucket_name"],
                 'Key': s3_key,
                 'ContentType': file_request.file_type
             },
             ExpiresIn=3600  # 1 hour
         )
+
+        if not presigned_url:
+            raise HTTPException(
+                status_code=422,
+                detail="Failed to generate upload presigned url",
+            )
 
         # Create database record with pending status
         document_result = supabase.table("project_documents").insert({
@@ -77,10 +80,10 @@ async def get_upload_url(
         }).execute()
 
         if not document_result.data:
-            raise HTTPException(status_code=500, detail="Failed to create document record")
+            raise HTTPException(status_code=500, detail="Failed to create document record - invalid data provided")
         
         return {
-            "message": "Upload URL generated successfully",
+            "message": "Upload presigned URL generated successfully",
             "data": {
                 "upload_url": presigned_url,
                 "s3_key": s3_key,
@@ -89,11 +92,11 @@ async def get_upload_url(
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail = f"Failed to generate the presigned URL: {str(e)}")
+        raise HTTPException(status_code=500, detail = f"An internal server error occurred while generating upload presigned url for {project_id}: {str(e)}")
 
 
-@router.post("/api/projects/{project_id}/files/confirm")
-async def confirm_file_upload(
+@router.post("/{project_id}/files/confirm")
+async def confirm_file_upload_to_s3(
     project_id: str, 
     confirm_request: dict, 
     clerk_id: str = Depends(get_current_user)
@@ -103,37 +106,57 @@ async def confirm_file_upload(
 
         if not s3_key:
             raise HTTPException(status_code=400, detail="s3_key is required")
+        
+        
+        document_verification_result = (
+            supabase.table("project_documents")
+            .select("id")
+            .eq("s3_key", s3_key)
+            .eq("project_id", project_id)
+            .eq("clerk_id", clerk_id)
+            .execute()
+        )
+
+        if not document_verification_result.data:
+            raise HTTPException(
+                status_code=404,
+                detail="File not found or you don't have permission to confirm upload to S3 for this file",
+            )
 
         # Update document status
         result = supabase.table("project_documents").update({
-            "processing_status": "queued"
-        }).eq("s3_key", s3_key).eq("project_id", project_id).eq("clerk_id", clerk_id).execute()
+            "processing_status": ProcessingStatus.QUEUED
+        }).eq("s3_key", s3_key).execute()
 
-        document = result.data[0]
-        document_id = document["id"]
-
-        if not result.data:
-            raise HTTPException(status_code=404, detail="Document not found or access denied")
+        document_id = result.data[0]["id"]
 
         # Start background preprocessing of the current file with Celery
-        task = process_document.delay(document_id)
+        task_result = process_document_ingestion.delay(document_id)
+        task_id = task_result.id
 
         #Store this task ID so that we can track later if needed
-        supabase.table("project_documents").update({
-            "task_id": task.id
+        document_update_result = supabase.table("project_documents").update({
+            "task_id": task_id
         }).eq("id", document_id).execute()
+
+        if not document_update_result.data:
+            raise HTTPException(
+                status_code=422,
+                detail="Failed to update project document record with task_id",
+            )
+
 
         # Return JSON 
         return {
-            "message": "Upload confirmed, processing started with Celery", 
-            "data": document
+            "message": "Upload to S3 confirmed, background Pre-Processing started", 
+            "data": document_update_result.data[0]
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail = f"Failed to confirm upload: {str(e)}")
+        raise HTTPException(status_code=500, detail = f"An internal server error occurred while confirming upload to S3 for {project_id}: {str(e)}")
     
 
-@router.post("/api/projects/{project_id}/urls")
+@router.post("/{project_id}/urls")
 async def add_website_url(
     project_id: str, 
     url_request: UrlAddRequest, 
@@ -146,6 +169,12 @@ async def add_website_url(
         if not url.startswith(('http://', 'https://')):
             url = "https://" + url
 
+        if not validate_url(url):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid URL",
+            )
+
 
         result = supabase.table("project_documents").insert({
             "project_id": project_id,
@@ -153,37 +182,43 @@ async def add_website_url(
             's3_key': "",
             'file_size': 0,
             'file_type': 'text/html',
-            'processing_status': 'queued',
+            'processing_status': ProcessingStatus.QUEUED,
             'clerk_id': clerk_id, 
             "source_url": url, 
             "source_type": "url"
         }).execute()
 
         if not result.data:
-            raise HTTPException(status_code=500, detail="Failed to create URL record")
+            raise HTTPException(status_code=500, detail="Failed to create URL record - invalid data provided")
         
-        document = result.data[0]
-        document_id = document["id"]
+        document_id = result.data[0]["id"]
 
         #Start background preprocessing of the current file with celery
-        task = process_document.delay(document_id)
+        task_result = process_document_ingestion.delay(document_id)
+        task_id = task_result.id
 
         #Store this task ID so that we can track later if needed
-        supabase.table("project_documents").update({
-            "task_id": task.id
+        document_update_result = supabase.table("project_documents").update({
+            "task_id": task_id
         }).eq("id", document_id).execute()
+
+        if not document_update_result.data:
+            raise HTTPException(
+                status_code=422,
+                detail="Failed to update project document record with task_id",
+            )
 
 
         return {
-            "message": "URL added successfully, processing started", 
+            "message": "URL added successfully, background Pre-Processing started", 
             "data": result.data[0]
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to add URL: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred while processing urls for {project_id}: {str(e)}")
 
 
-@router.delete("/api/projects/{project_id}/files/{file_id}")
+@router.delete("/{project_id}/files/{file_id}")
 async def delete_file(
     project_id: str, 
     file_id: str, 
@@ -197,14 +232,13 @@ async def delete_file(
             raise HTTPException(status_code=404, detail="File not found or access denied")
         
         
-        file_record = file_result.data[0]
-        s3_key = file_record["s3_key"]
+        s3_key = file_result.data[0]["s3_key"]
 
 
         # Delete from S3 (only for actual files, not URLs)
         if s3_key:
             try: 
-                s3_client.delete_object(Bucket=BUCKET_NAME, Key=s3_key)
+                s3_client.delete_object(Bucket=appConfig["s3_bucket_name"], Key=s3_key)
                 print(f"Deleted from S3: {s3_key}")
             except Exception as s3_error:
                 print(f"Failed to delete from S3: {s3_error}")
@@ -227,10 +261,10 @@ async def delete_file(
         }    
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred while deleting project document {file_id} for {project_id}: {str(e)}")
     
 
-@router.get("/api/projects/{project_id}/files/{file_id}/chunks")
+@router.get("/{project_id}/files/{file_id}/chunks")
 async def get_document_chunks(
     project_id: str,
     file_id: str,
@@ -256,6 +290,6 @@ async def get_document_chunks(
 
     except Exception as e:
         print(f"ERROR getting chunks: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Failed to get document chunks: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred while getting project document chunks for {file_id} for {project_id}: {str(e)}")
     
     

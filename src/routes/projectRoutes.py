@@ -1,31 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException
-from database import supabase
-from auth import get_current_user
-from pydantic import BaseModel
+
+from src.services.supabase import supabase
+from src.services.clerkAuth import get_current_user
+
+from src.models.index import ProjectCreate, ProjectSettings, SendMessageRequest, MessageRole
+
+from src.rag.retrieval.index import retrieve_context
+from src.rag.retrieval.utils import validate_context, prepare_prompt_and_invoke_llm
+
 
 router = APIRouter(
     tags=["projects"]
 )
 
-class ProjectCreate(BaseModel):
-    name: str
-    description: str = ""
 
-class ProjectSettings(BaseModel):
-    embedding_model: str
-    rag_strategy: str
-    agent_type: str
-    chunks_per_search: int
-    final_context_size: int
-    similarity_threshold: float
-    number_of_queries: int
-    reranking_enabled: bool
-    reranking_model: str
-    vector_weight: float
-    keyword_weight: float
-
-
-@router.get("/api/projects") 
+@router.get("/") 
 def get_projects(clerk_id: str = Depends(get_current_user)):
     try:
         result = supabase.table('projects').select('*').eq('clerk_id', clerk_id).execute()
@@ -33,14 +22,14 @@ def get_projects(clerk_id: str = Depends(get_current_user)):
         return { 
             "success": True,
             "message": "Projects retrieved successfully",
-            "data": result.data
+            "data": result.data or []
         }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get projects: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred while fetching projects: {str(e)}")
     
     
-@router.post("/api/projects") 
+@router.post("/") 
 def create_project(project: ProjectCreate, clerk_id: str = Depends(get_current_user)):
     try:
         # Step 1: Insert new project into database
@@ -56,8 +45,7 @@ def create_project(project: ProjectCreate, clerk_id: str = Depends(get_current_u
                 detail="Failed to create project - invalid data provided"
             )
 
-        created_project = project_result.data[0]
-        project_id = created_project["id"]
+        project_id = project_result.data[0]["id"]
 
         # Step 2: Create default settings for the project 
         settings_result = supabase.table("project_settings").insert({
@@ -86,7 +74,7 @@ def create_project(project: ProjectCreate, clerk_id: str = Depends(get_current_u
         return {
             "success": True,
             "message": "Project created successfully", 
-            "data": created_project 
+            "data": project_result.data[0] 
         }
 
     except Exception as e:
@@ -96,7 +84,7 @@ def create_project(project: ProjectCreate, clerk_id: str = Depends(get_current_u
         )
     
     
-@router.delete("/api/projects/{project_id}")
+@router.delete("/{project_id}")
 def delete_project(
     project_id: str, 
     clerk_id: str = Depends(get_current_user)
@@ -133,7 +121,7 @@ def delete_project(
         )
 
 
-@router.get("/api/projects/{project_id}")
+@router.get("/{project_id}")
 async def get_project(
     project_id: str, 
     clerk_id: str = Depends(get_current_user)
@@ -160,7 +148,7 @@ async def get_project(
         )
 
 
-@router.get("/api/projects/{project_id}/chats")
+@router.get("/{project_id}/chats")
 async def get_project_chats(
     project_id: str, 
     clerk_id: str = Depends(get_current_user)
@@ -181,10 +169,9 @@ async def get_project_chats(
         )
     
 
-@router.get("/api/projects/{project_id}/settings")
+@router.get("/{project_id}/settings")
 async def get_project_settings(
-    project_id: str, 
-    clerk_id: str = Depends(get_current_user)
+    project_id: str
 ):
     try:
         settings_result = supabase.table("project_settings").select("*").eq("project_id", project_id).execute()
@@ -208,7 +195,7 @@ async def get_project_settings(
         )
     
 
-@router.put("/api/projects/{project_id}/settings")
+@router.put("/{project_id}/settings")
 async def update_project_settings(
     project_id: str, 
     settings: ProjectSettings, 
@@ -244,4 +231,68 @@ async def update_project_settings(
             status_code=500, 
             detail=f"An internal server error occurred while updating project settings: {str(e)}"
         )
+    
+
+@router.post("/{project_id}/chats/{chat_id}/messages")
+async def send_message(
+    chat_id: str,
+    project_id: str,
+    request: SendMessageRequest,
+    clerk_id: str = Depends(get_current_user)
+):
+    try:
+        message = request.content
+        
+        print(f"New message: {message[:50]}...")
+        
+        # Save user message
+        print(f"Saving user message...")
+        user_message_result = supabase.table('messages').insert({
+            "chat_id": chat_id,
+            "content": message,
+            "role": MessageRole.USER.value,
+            "clerk_id": clerk_id
+        }).execute()
+        
+        user_message = user_message_result.data[0]
+        print(f"User message saved: {user_message['id']}")
+        
+        #Retrieval
+        texts, images, tables, citations = retrieve_context(project_id, message)
+        validate_context(texts, images, tables, citations)
+        
+        # Build system prompt with injected context
+        print(f"Preparing context and calling LLM...")
+        ai_response = prepare_prompt_and_invoke_llm(
+            user_query=message,
+            texts=texts,
+            images=images,
+            tables=tables
+        )
+        
+        # Store AI's response with citations to database
+        print(f"Saving AI message...")
+        ai_message_result = supabase.table('messages').insert({
+            "chat_id": chat_id,
+            "content": ai_response,
+            "role": MessageRole.ASSISTANT.value,
+            "clerk_id": clerk_id,
+            "citations": citations
+        }).execute()
+        
+        ai_message = ai_message_result.data[0]
+        print(f"AI message saved: {ai_message['id']}")
+        
+        #Return data
+        return {
+            "message": "Messages sent successfully",
+            "data": {
+                "userMessage": user_message,
+                "aiMessage": ai_message
+            }
+        }
+        
+    except Exception as e:
+        print(f"Error in send_message: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
     
