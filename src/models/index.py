@@ -57,3 +57,5 @@ class MessageRole(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
 
+class QueryVariations(BaseModel):
+    queries: List[str] = Field(..., description="The variations of the query")
