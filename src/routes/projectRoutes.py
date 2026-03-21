@@ -1,3 +1,5 @@
+from typing import Dict, List
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.services.supabase import supabase
@@ -5,8 +7,7 @@ from src.services.clerkAuth import get_current_user
 
 from src.models.index import ProjectCreate, ProjectSettings, SendMessageRequest, MessageRole
 
-from src.rag.retrieval.index import retrieve_context
-from src.rag.retrieval.utils import validate_context, prepare_prompt_and_invoke_llm
+from src.agents.simple_agent.agent import create_simple_rag_agent
 
 
 router = APIRouter(
@@ -243,45 +244,59 @@ async def send_message(
     try:
         message = request.content
         
-        print(f"New message: {message[:50]}...")
-        
         # Save user message
-        print(f"Saving user message...")
         user_message_result = supabase.table('messages').insert({
             "chat_id": chat_id,
             "content": message,
             "role": MessageRole.USER.value,
             "clerk_id": clerk_id
         }).execute()
+
+        if not user_message_result.data:
+            raise HTTPException(status_code=422, detail="Failed to create message")
         
         user_message = user_message_result.data[0]
-        print(f"User message saved: {user_message['id']}")
-        
-        #Retrieval
-        texts, images, tables, citations = retrieve_context(project_id, message)
-        validate_context(texts, images, tables, citations)
-        
-        # Build system prompt with injected context
-        print(f"Preparing context and calling LLM...")
-        ai_response = prepare_prompt_and_invoke_llm(
-            user_query=message,
-            texts=texts,
-            images=images,
-            tables=tables
-        )
-        
-        # Store AI's response with citations to database
-        print(f"Saving AI message...")
+
+        # Get project settings to retrieve agent_type
+        try:
+            project_settings = await get_project_settings(project_id)
+            agent_type = project_settings["data"].get("agent_type", "simple")
+        except Exception as e:
+            agent_type = "simple"
+
+        # Get chat history (excluding current message)
+        chat_history = get_chat_history(chat_id, exclude_message_id=user_message["id"])
+
+        # Invoke the appropriate agent based on agent_type
+        if agent_type == "simple":
+            agent = create_simple_rag_agent(
+                project_id=project_id,
+                model="gpt-4o",
+                chat_history=chat_history
+            )
+
+        # Invoke the agent with the user's message
+        result = agent.invoke({
+            "messages": [{"role": "user", "content": message}]
+        })
+
+        # Extract the final response and citations from the result
+        final_response = result["messages"][-1].content
+        citations = result.get("citations", [])
+
+         # Insert the AI Response into the database.
         ai_message_result = supabase.table('messages').insert({
             "chat_id": chat_id,
-            "content": ai_response,
+            "content": final_response,
             "role": MessageRole.ASSISTANT.value,
             "clerk_id": clerk_id,
             "citations": citations
         }).execute()
+
+        if not ai_message_result.data:
+            raise HTTPException(status_code=422, detail="Failed to create AI response")
         
         ai_message = ai_message_result.data[0]
-        print(f"AI message saved: {ai_message['id']}")
         
         #Return data
         return {
@@ -293,6 +308,44 @@ async def send_message(
         }
         
     except Exception as e:
-        print(f"Error in send_message: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred while creating message: {str(e)}")
+    
+
+def get_chat_history(chat_id: str, exclude_message_id: str = None) -> List[Dict[str, str]]:
+    """
+    Retrieves the last 10 messages (5 user + 5 assistant) from the chat,
+    excluding the current message being processed.
+    """
+    try:
+        query = (
+            supabase.table("messages")
+            .select("id, role, content")
+            .eq("chat_id", chat_id)
+            .order("created_at", desc=False)
+        )
+        
+        # Exclude current message if provided
+        if exclude_message_id:
+            query = query.neq("id", exclude_message_id)
+        
+        messages_result = query.execute()
+        
+        if not messages_result.data:
+            return []
+        
+        # Get last 10 messages (limit to 10 total messages)
+        recent_messages = messages_result.data[-10:]
+        
+        # Format messages for agent
+        formatted_history = []
+        for msg in recent_messages:
+            formatted_history.append({
+                "role": msg.get("role", "user"),
+                "content": msg.get("content", "")
+            })
+        
+        return formatted_history
+    except Exception:
+        # If history retrieval fails, return empty list
+        return []
     

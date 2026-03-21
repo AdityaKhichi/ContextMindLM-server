@@ -168,60 +168,59 @@ def chunk_elements(elements):
 
 
 def summarise_chunks(chunks, document_id, source_type="file"):
-    print("Processing chunks with AI Summarisation...")
-    
-    processed_chunks = []
-    total_chunks = len(chunks)
-    
-    for i, chunk in enumerate(chunks):
-        current_chunk = i + 1
+    try:
+        processed_chunks = []
+        total_chunks = len(chunks)
         
-        # Update progress directly
-        update_status(document_id, ProcessingStatus.SUMMARISING, {
-            "summarising": {
-                "current_chunk": current_chunk,
-                "total_chunks": total_chunks
-            }
-        })
-        
-        # Extract content from the chunk
-        content_data = separate_content_types(chunk, source_type)
+        for i, chunk in enumerate(chunks):
+            current_chunk = i + 1
+            
+            # Update progress directly
+            update_status(document_id, ProcessingStatus.SUMMARISING, {
+                "summarising": {
+                    "current_chunk": current_chunk,
+                    "total_chunks": total_chunks
+                }
+            })
+            
+            # Extract content from the chunk
+            content_data = separate_content_types(chunk, source_type)
 
-        # Debug prints
-        print(f"     Types found: {content_data['types']}")
-        print(f"     Tables: {len(content_data['tables'])}, Images: {len(content_data['images'])}")
-        
-        # Decide if we need AI summarisation
-        if content_data['tables'] or content_data['images']:
-            print(f"     Creating AI summary for mixed content...")
-            enhanced_content = create_ai_summary( 
-                content_data['text'], 
-                content_data['tables'], 
-                content_data['images']
-            )
-        else:
-            enhanced_content = content_data['text']
-        
-        # Build the original_content structure
-        original_content = {'text': content_data['text']}
-        if content_data['tables']:
-            original_content['tables'] = content_data['tables']
-        if content_data['images']:
-            original_content['images'] = content_data['images']
-        
-        # Create processed chunk with all data
-        processed_chunk = {
-            'content': enhanced_content,
-            'original_content': original_content, 
-            'type': content_data['types'],
-            'page_number': get_page_number(chunk, i),
-            'char_count': len(enhanced_content)
-        }
-        
-        processed_chunks.append(processed_chunk)
-    
-    print(f"Processed {len(processed_chunks)} chunks")
-    return processed_chunks
+            # Debug prints
+            print(f"     Types found: {content_data['types']}")
+            print(f"     Tables: {len(content_data['tables'])}, Images: {len(content_data['images'])}")
+            
+            # Decide if we need AI summarisation
+            if content_data['tables'] or content_data['images']:
+                enhanced_content = create_ai_summary( 
+                    content_data['text'], 
+                    content_data['tables'], 
+                    content_data['images']
+                )
+            else:
+                enhanced_content = content_data['text']
+            
+            # Build the original_content structure
+            original_content = {'text': content_data['text']}
+            if content_data['tables']:
+                original_content['tables'] = content_data['tables']
+            if content_data['images']:
+                original_content['images'] = content_data['images']
+            
+            # Create processed chunk with all data
+            processed_chunk = {
+                'content': enhanced_content,
+                'original_content': original_content, 
+                'type': content_data['types'],
+                'page_number': get_page_number(chunk, i),
+                'char_count': len(enhanced_content)
+            }
+            
+            processed_chunks.append(processed_chunk)
+            
+        return processed_chunks
+    except Exception as e:
+        raise Exception(f"Failed to summarise chunks: {str(e)}")
 
 
 def store_chunks_with_embeddings(document_id: str, processed_chunks: list):

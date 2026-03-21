@@ -46,7 +46,8 @@ def separate_content_types(chunk, source_type="file"):
             elif element_type == 'Image' and not is_url_source:
                 if (hasattr(element, 'metadata') and 
                     hasattr(element.metadata, 'image_base64') and 
-                    element.metadata.image_base64 is not None):
+                    element.metadata.image_base64 is not None
+                ):
                     content_data['types'].append('image')
                     content_data['images'].append(element.metadata.image_base64)
     
@@ -60,10 +61,8 @@ def create_ai_summary(text, tables_html, images_base64):
     try:
         # Build the text prompt with more efficient instructions
         prompt_text = f"""Create a searchable index for this document content.
-
         CONTENT:
         {text}
-
         """
         
         # Add tables if present
@@ -107,7 +106,6 @@ def create_ai_summary(text, tables_html, images_base64):
                 "type": "image_url",
                 "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
             })
-            print(f"🖼️ Image {i+1} included in summary request")
         
         message = HumanMessage(content=message_content)
         

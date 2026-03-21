@@ -3,7 +3,7 @@ from src.config.index import appConfig
 
 openAI = {
     "embeddings_llm": ChatOpenAI(
-        model="gpt-4-turbo", api_key=appConfig["openai_api_key"], temperature=0
+        model="gpt-4o-mini", api_key=appConfig["openai_api_key"], temperature=0
     ),
     "embeddings": OpenAIEmbeddings(
         model="text-embedding-3-large",
