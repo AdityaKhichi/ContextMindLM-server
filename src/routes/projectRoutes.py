@@ -8,6 +8,7 @@ from src.services.clerkAuth import get_current_user
 from src.models.index import ProjectCreate, ProjectSettings, SendMessageRequest, MessageRole
 
 from src.agents.simple_agent.agent import create_simple_rag_agent
+from src.agents.supervisor_agent.agent import create_supervisor_agent
 
 
 router = APIRouter(
@@ -264,12 +265,20 @@ async def send_message(
         except Exception as e:
             agent_type = "simple"
 
+        print(agent_type, "agent_type")
+
         # Get chat history (excluding current message)
         chat_history = get_chat_history(chat_id, exclude_message_id=user_message["id"])
 
         # Invoke the appropriate agent based on agent_type
         if agent_type == "simple":
             agent = create_simple_rag_agent(
+                project_id=project_id,
+                model="gpt-4o",
+                chat_history=chat_history
+            )
+        elif agent_type == "agentic":
+            agent = create_supervisor_agent(
                 project_id=project_id,
                 model="gpt-4o",
                 chat_history=chat_history
