@@ -1,3 +1,5 @@
+import json
+
 from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,6 +11,9 @@ from src.models.index import ProjectCreate, ProjectSettings, SendMessageRequest,
 
 from src.agents.simple_agent.agent import create_simple_rag_agent
 from src.agents.supervisor_agent.agent import create_supervisor_agent
+
+from fastapi import APIRouter, Query
+from fastapi.responses import StreamingResponse
 
 
 router = APIRouter(
@@ -358,3 +363,142 @@ def get_chat_history(chat_id: str, exclude_message_id: str = None) -> List[Dict[
         # If history retrieval fails, return empty list
         return []
     
+
+@router.post("/{project_id}/chats/{chat_id}/messages/stream")
+async def stream_message(
+    project_id: str,
+    chat_id: str,
+    message: SendMessageRequest,
+    clerk_id: str = Query(..., description="Clerk user ID"),
+):
+    async def event_generator():
+        try:
+
+            # Insert user message into database
+            message_content = message.content
+            message_insert_data = {
+                "content": message_content,
+                "chat_id": chat_id,
+                "clerk_id": clerk_id,
+                "role": MessageRole.USER.value,
+            }
+            message_creation_result = (
+                supabase.table("messages").insert(message_insert_data).execute()
+            )
+            if not message_creation_result.data:
+                yield f"event: error\ndata: {json.dumps({'message': 'Failed to create message'})}\n\n"
+                return
+            
+            user_message_data = message_creation_result.data[0]
+            current_message_id = user_message_data["id"]
+            
+            # Get project settings for agent_type
+            try:
+                project_settings = await get_project_settings(project_id)
+                agent_type = project_settings["data"].get("agent_type", "simple")
+            except Exception as e:
+                agent_type = "simple"
+
+            
+            # Get chat history
+            chat_history = get_chat_history(chat_id, exclude_message_id=current_message_id)
+            
+            # Create the appropriate agent
+            if agent_type == "simple":
+                agent = create_simple_rag_agent(
+                    project_id=project_id,
+                    model="gpt-4o",
+                    chat_history=chat_history
+                )
+            else:  # agentic
+                agent = create_supervisor_agent(
+                    project_id=project_id,
+                    model="gpt-4o",
+                    chat_history=chat_history
+                )
+
+            
+            # Stream the agent response
+            full_response = ""
+            citations = []
+            
+            # Track state to know when we're in the final response
+            tool_called = False
+            is_final_response = False
+            
+            async for event in agent.astream_events(
+                {"messages": [{"role": "user", "content": message_content}]},
+                version="v2"
+            ):
+                kind = event["event"]
+                tags = event.get("tags", [])
+                name = event.get("name", "")
+                
+
+                # Status updates for tool calls
+                if kind == "on_tool_start":
+                    tool_called = True
+                    tool_name = name
+                    if tool_name == "rag_search":
+                        yield f"event: status\ndata: {json.dumps({'status': 'Searching documents...'})}\n\n"
+                    elif tool_name == "search_web":
+                        yield f"event: status\ndata: {json.dumps({'status': 'Searching the web...'})}\n\n"
+                
+                # Detect when tool ends - next model call will be the final response
+                elif kind == "on_tool_end":
+                    is_final_response = True
+                    yield f"event: status\ndata: {json.dumps({'status': 'Generating response...'})}\n\n"
+                
+                # Stream tokens from the model
+                elif kind == "on_chat_model_stream":
+                    # Stream if:
+                    # Either tool finished OR no tool was called yet AND
+                    # Has the seq:step:1 tag (part of main agent flow, not nested LLM)
+                    if (is_final_response or not tool_called) and 'seq:step:1' in tags:
+                        chunk = event["data"].get("chunk")
+                        if chunk:
+                            content = chunk.content if hasattr(chunk, 'content') else ""
+                            if content:
+                                full_response += content
+                                yield f"event: token\ndata: {json.dumps({'content': content})}\n\n"
+                
+                # Capture citations from the final state
+                elif kind == "on_chain_end" and name == "LangGraph" and tags == []:
+                    # This is the outermost LangGraph ending
+                    output = event.get("data", {}).get("output", {})
+                    if isinstance(output, dict) and "citations" in output:
+                        citations = output["citations"]
+            
+            
+            # Insert AI response into database
+            ai_response_insert_data = {
+                "content": full_response,
+                "chat_id": chat_id,
+                "clerk_id": clerk_id,
+                "role": MessageRole.ASSISTANT.value,
+                "citations": citations,
+            }
+            ai_response_creation_result = (
+                supabase.table("messages").insert(ai_response_insert_data).execute()
+            )
+            
+            if not ai_response_creation_result.data:
+                yield f"event: error\ndata: {json.dumps({'message': 'Failed to save AI response'})}\n\n"
+                return
+            
+            ai_message_data = ai_response_creation_result.data[0]
+            
+            # Send done event
+            yield f"event: done\ndata: {json.dumps({'userMessage': user_message_data, 'aiMessage': ai_message_data})}\n\n"
+            
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
