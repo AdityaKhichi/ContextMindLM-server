@@ -10,7 +10,8 @@ from src.routes.chatRoutes import router as chatRoutes
 app = FastAPI(
     title="ContextMindLM API",
     description="Backend API for ContextMindLM application",
-    version="1.0.0"
+    version="1.0.0",
+    redirect_slashes=False,
 )
 
 # Configure CORS
@@ -29,11 +30,17 @@ app.include_router(projectFilesRoutes, prefix="/api/projects")
 app.include_router(chatRoutes, prefix="/api/chats")
 
 
-"""
+@app.get("/")
+async def root():
+    return {
+        "name": "ContextMindLM API",
+        "status": "running"
+    }
+
+
 @app.get("/health")
 async def health_check():
     return {
         "status": "healthy",
         "version": "1.0.0"
     }
-"""
