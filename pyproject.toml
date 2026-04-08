@@ -25,7 +25,8 @@ dependencies = [
     "ddgs (>=9.9.1,<10.0.0)",
     "langchain-tavily (>=0.2.13,<0.3.0)",
     "torch",
-    "torchvision"
+    "torchvision",
+    "structlog (>=25.5.0,<26.0.0)"
 ]
 
 [[tool.poetry.source]]

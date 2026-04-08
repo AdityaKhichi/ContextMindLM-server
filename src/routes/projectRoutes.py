@@ -15,6 +15,10 @@ from src.agents.supervisor_agent.agent import create_supervisor_agent
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
+from src.config.logging import get_logger, set_project_id, set_user_id
+
+logger = get_logger(__name__)
+
 
 router = APIRouter(
     tags=["projects"]
@@ -23,9 +27,13 @@ router = APIRouter(
 
 @router.get("/") 
 def get_projects(clerk_id: str = Depends(get_current_user)):
+    set_user_id(clerk_id)
+
     try:
+        logger.info("fetching_projects")
         result = supabase.table('projects').select('*').eq('clerk_id', clerk_id).execute()
  
+        logger.info("projects_retrieved", project_count=len(result.data or []))
         return { 
             "success": True,
             "message": "Projects retrieved successfully",
@@ -33,12 +41,16 @@ def get_projects(clerk_id: str = Depends(get_current_user)):
         }
 
     except Exception as e:
+        logger.error("projects_fetch_failed", error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"An error occurred while fetching projects: {str(e)}")
     
     
 @router.post("/") 
 def create_project(project: ProjectCreate, clerk_id: str = Depends(get_current_user)):
+    set_user_id(clerk_id)
+    
     try:
+        logger.info("creating_project", name=project.name)
         # Step 1: Insert new project into database
         project_result = supabase.table("projects").insert({
             "name": project.name, 
@@ -47,12 +59,14 @@ def create_project(project: ProjectCreate, clerk_id: str = Depends(get_current_u
         }).execute()
 
         if not project_result.data:
+            logger.error("project_creation_failed", name=project.name, reason="no_data_returned")
             raise HTTPException(
                 status_code=422, 
                 detail="Failed to create project - invalid data provided"
             )
 
         project_id = project_result.data[0]["id"]
+        logger.info("project_created", name=project.name)
 
         # Step 2: Create default settings for the project 
         settings_result = supabase.table("project_settings").insert({
@@ -71,6 +85,7 @@ def create_project(project: ProjectCreate, clerk_id: str = Depends(get_current_u
         }).execute()
 
         if not settings_result.data:
+            logger.error("project_settings_creation_failed", reason="no_data_returned")
             # Step 3: Rollback - Delete the project if settings creation fails
             supabase.table("projects").delete().eq("id", project_id).execute()
             raise HTTPException(
@@ -78,6 +93,7 @@ def create_project(project: ProjectCreate, clerk_id: str = Depends(get_current_u
                 detail="Failed to create project settings - project creation rolled back"
             )
 
+        logger.info("project_created_successfully", name=project.name)
         return {
             "success": True,
             "message": "Project created successfully", 
@@ -85,6 +101,7 @@ def create_project(project: ProjectCreate, clerk_id: str = Depends(get_current_u
         }
 
     except Exception as e:
+        logger.error("project_creation_error", name=project.name, error=str(e), exc_info=True)
         raise HTTPException(
             status_code=500, 
             detail=f"An internal server error occurred while creating project: {str(e)}"
@@ -96,11 +113,16 @@ def delete_project(
     project_id: str, 
     clerk_id: str = Depends(get_current_user)
 ):
+    set_project_id(project_id)
+    set_user_id(clerk_id)
+
     try:
+        logger.info("deleting_project")
         # Step 1: Verify project exists and belongs to user 
         project_result = supabase.table("projects").select("*").eq("id", project_id).eq("clerk_id", clerk_id).execute()
 
         if not project_result.data: 
+            logger.warning("project_not_found_or_unauthorized")
             raise HTTPException(
                 status_code=404, 
                 detail="Project not found or you don't have permission to delete it"
@@ -110,11 +132,13 @@ def delete_project(
         deleted_result = supabase.table("projects").delete().eq("id", project_id).eq("clerk_id", clerk_id).execute()
 
         if not deleted_result.data: 
+            
             raise HTTPException(
                 status_code=404, 
                 detail="Failed to delete project - project not found"
             )
 
+        logger.info("project_deleted_successfully")
         return {
             "success": True,
             "message": "Project deleted successfully", 
@@ -122,6 +146,7 @@ def delete_project(
         }
     
     except Exception as e:
+        logger.error("project_deletion_error", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=500, 
             detail=f"An internal server error occurred while deleting project: {str(e)}"
@@ -133,15 +158,21 @@ async def get_project(
     project_id: str, 
     clerk_id: str = Depends(get_current_user)
 ):
+    set_project_id(project_id)
+    set_user_id(clerk_id)
+
     try:
+        logger.info("fetching_project")
         result = supabase.table("projects").select("*").eq("id", project_id).eq("clerk_id", clerk_id).execute()
 
         if not result.data:
+            logger.warning("project_not_found")
             raise HTTPException(
                 status_code=404, 
                 detail="Project not found or you don't have permission to access it"
             )
 
+        logger.info("project_retrieved")
         return {
             "success": True,
             "message": "Project retrieved successfully", 
@@ -149,6 +180,7 @@ async def get_project(
         }
     
     except Exception as e:
+        logger.error("project_retrieval_error", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=500, 
             detail=f"An internal server error occurred while retrieving project: {str(e)}"
@@ -160,9 +192,14 @@ async def get_project_chats(
     project_id: str, 
     clerk_id: str = Depends(get_current_user)
 ):
+    set_project_id(project_id)
+    set_user_id(clerk_id)
+
     try:
+        logger.info("fetching_project_chats")
         result = supabase.table("chats").select("*").eq("project_id", project_id).eq("clerk_id", clerk_id).order("created_at", desc=True).execute()
 
+        logger.info("project_chats_retrieved", chat_count=len(result.data or []))
         return {
             "success": True,
             "message": "Project chats retrieved successfully", 
@@ -170,6 +207,7 @@ async def get_project_chats(
         }
 
     except Exception as e:
+        logger.error("project_chats_retrieval_error", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=500, 
             detail=f"An internal server error occurred while retrieving project chats: {str(e)}"
@@ -178,17 +216,30 @@ async def get_project_chats(
 
 @router.get("/{project_id}/settings")
 async def get_project_settings(
-    project_id: str
+    project_id: str,
+    clerk_id: str = Depends(get_current_user)
 ):
+    set_project_id(project_id)
+    set_user_id(clerk_id)
+
     try:
+        logger.info("fetching_project_settings")
         settings_result = supabase.table("project_settings").select("*").eq("project_id", project_id).execute()
 
         if not settings_result.data:
+            logger.warning("project_settings_not_found")
             raise HTTPException(
                 status_code=404, 
                 detail="Project settings not found"
             )
 
+        logger.info("project_settings_retrieved",
+            rag_strategy=settings_result.get("rag_strategy"),
+            agent_type=settings_result.get("agent_type"),
+            embedding_model=settings_result.get("embedding_model"),
+            final_context_size=settings_result.get("final_context_size"),
+            reranking_enabled=settings_result.get("reranking_enabled")
+        )
         return {
             "success": True,
             "message": "Project settings retrieved successfully", 
@@ -196,6 +247,7 @@ async def get_project_settings(
         }
 
     except Exception as e:
+        logger.error("project_settings_retrieval_error", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=500, 
             detail=f"An internal server error occurred while retrieving project settings: {str(e)}"
@@ -209,10 +261,18 @@ async def update_project_settings(
     clerk_id: str = Depends(get_current_user)
 ):
     try: 
+        logger.info("updating_project_settings",
+            rag_strategy=settings.rag_strategy,
+            agent_type=settings.agent_type,
+            embedding_model=settings.embedding_model,
+            final_context_size=settings.final_context_size,
+            reranking_enabled=settings.reranking_enabled
+        )
         # Verify the project exists and belongs to the user
         project_result = supabase.table("projects").select("id").eq("id", project_id).eq("clerk_id", clerk_id).execute()    
 
         if not project_result.data:
+            logger.warning("project_not_found_for_settings_update")
             raise HTTPException(
                 status_code=404, 
                 detail="Project not found or you don't have permission to update its settings"
@@ -222,11 +282,19 @@ async def update_project_settings(
         result = supabase.table("project_settings").update(settings.model_dump()).eq("project_id", project_id).execute()
 
         if not result.data:
+            logger.error("project_settings_update_failed", reason="no_data_returned")
             raise HTTPException(
                 status_code=422, 
                 detail="Failed to update project settings - invalid data provided"
             )
 
+        logger.info("project_settings_updated_successfully",
+            rag_strategy=settings.rag_strategy,
+            agent_type=settings.agent_type,
+            embedding_model=settings.embedding_model,
+            final_context_size=settings.final_context_size,
+            reranking_enabled=settings.reranking_enabled
+        )
         return {
             "success": True,
             "message": "Project settings updated successfully", 
@@ -234,6 +302,7 @@ async def update_project_settings(
         }
 
     except Exception as e:
+        logger.error("project_settings_update_error", error=str(e), exc_info=True)
         raise HTTPException(
             status_code=500, 
             detail=f"An internal server error occurred while updating project settings: {str(e)}"
@@ -247,7 +316,11 @@ async def send_message(
     request: SendMessageRequest,
     clerk_id: str = Depends(get_current_user)
 ):
+    set_project_id(project_id)
+    set_user_id(clerk_id)
+
     try:
+        logger.info("sending_message", chat_id=chat_id)
         message = request.content
         
         # Save user message
@@ -259,21 +332,25 @@ async def send_message(
         }).execute()
 
         if not user_message_result.data:
+            logger.error("message_creation_failed", chat_id=chat_id, reason="no_data_returned")
             raise HTTPException(status_code=422, detail="Failed to create message")
         
         user_message = user_message_result.data[0]
+        logger.info("user_message_created", message_id=user_message["id"], chat_id=chat_id)
 
         # Get project settings to retrieve agent_type
         try:
             project_settings = await get_project_settings(project_id)
             agent_type = project_settings["data"].get("agent_type", "simple")
         except Exception as e:
+            logger.warning("settings_retrieval_failed_defaulting_to_simple", error=str(e))
             agent_type = "simple"
 
-        print(agent_type, "agent_type")
+        logger.info("agent_type_determined", agent_type=agent_type)
 
         # Get chat history (excluding current message)
         chat_history = get_chat_history(chat_id, exclude_message_id=user_message["id"])
+        logger.info("chat_history_retrieved", chat_id=chat_id, history_length=len(chat_history))
 
         # Invoke the appropriate agent based on agent_type
         if agent_type == "simple":
@@ -289,6 +366,7 @@ async def send_message(
                 chat_history=chat_history
             )
 
+        logger.info("invoking_agent", chat_id=chat_id, agent_type=agent_type)
         # Invoke the agent with the user's message
         result = agent.invoke({
             "messages": [{"role": "user", "content": message}]
@@ -297,6 +375,7 @@ async def send_message(
         # Extract the final response and citations from the result
         final_response = result["messages"][-1].content
         citations = result.get("citations", [])
+        logger.info("agent_invocation_completed", chat_id=chat_id, response_length=len(final_response), citations_count=len(citations))
 
          # Insert the AI Response into the database.
         ai_message_result = supabase.table('messages').insert({
@@ -308,10 +387,12 @@ async def send_message(
         }).execute()
 
         if not ai_message_result.data:
+            logger.error("ai_response_creation_failed", chat_id=chat_id, reason="no_data_returned")
             raise HTTPException(status_code=422, detail="Failed to create AI response")
         
         ai_message = ai_message_result.data[0]
         
+        logger.info("message_sent_successfully", chat_id=chat_id, ai_message_id=ai_message["id"])
         #Return data
         return {
             "message": "Messages sent successfully",
@@ -322,6 +403,7 @@ async def send_message(
         }
         
     except Exception as e:
+        logger.error("send_message_error", chat_id=chat_id, error=str(e), exc_info=True)
         raise HTTPException(status_code=500, detail=f"An internal server error occurred while creating message: {str(e)}")
     
 
@@ -373,6 +455,7 @@ async def stream_message(
 ):
     async def event_generator():
         try:
+            logger.info("sending_message", chat_id=chat_id)
 
             # Insert user message into database
             message_content = message.content
@@ -386,22 +469,27 @@ async def stream_message(
                 supabase.table("messages").insert(message_insert_data).execute()
             )
             if not message_creation_result.data:
+                logger.error("message_creation_failed", chat_id=chat_id, reason="no_data_returned")
                 yield f"event: error\ndata: {json.dumps({'message': 'Failed to create message'})}\n\n"
                 return
             
             user_message_data = message_creation_result.data[0]
             current_message_id = user_message_data["id"]
+            logger.info("user_message_created", message_id=current_message_id, chat_id=chat_id)
             
             # Get project settings for agent_type
             try:
                 project_settings = await get_project_settings(project_id)
                 agent_type = project_settings["data"].get("agent_type", "simple")
             except Exception as e:
+                logger.warning("settings_retrieval_failed_defaulting_to_simple", error=str(e))
                 agent_type = "simple"
 
-            
+            logger.info("agent_type_determined", agent_type=agent_type)
+
             # Get chat history
             chat_history = get_chat_history(chat_id, exclude_message_id=current_message_id)
+            logger.info("chat_history_retrieved", chat_id=chat_id, history_length=len(chat_history))
             
             # Create the appropriate agent
             if agent_type == "simple":
@@ -417,6 +505,7 @@ async def stream_message(
                     chat_history=chat_history
                 )
 
+            logger.info("invoking_agent", chat_id=chat_id, agent_type=agent_type)
             
             # Stream the agent response
             full_response = ""
@@ -469,7 +558,7 @@ async def stream_message(
                     if isinstance(output, dict) and "citations" in output:
                         citations = output["citations"]
             
-            
+            logger.info("agent_invocation_completed", chat_id=chat_id, response_length=len(full_response), citations_count=len(citations))
             # Insert AI response into database
             ai_response_insert_data = {
                 "content": full_response,
@@ -483,15 +572,18 @@ async def stream_message(
             )
             
             if not ai_response_creation_result.data:
+                logger.error("ai_response_creation_failed", chat_id=chat_id, reason="no_data_returned")
                 yield f"event: error\ndata: {json.dumps({'message': 'Failed to save AI response'})}\n\n"
                 return
             
             ai_message_data = ai_response_creation_result.data[0]
+            logger.info("message_sent_successfully", chat_id=chat_id, ai_message_id=ai_message_data["id"])
             
             # Send done event
             yield f"event: done\ndata: {json.dumps({'userMessage': user_message_data, 'aiMessage': ai_message_data})}\n\n"
             
         except Exception as e:
+            logger.error("send_message_error", chat_id=chat_id, error=str(e), exc_info=True)
             yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
     
     return StreamingResponse(
