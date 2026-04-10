@@ -28,8 +28,8 @@ if not os.getenv("REDIS_URL"):
 if not os.getenv("OPENAI_API_KEY"):
     raise ValueError("OPENAI_API_KEY must be set in .env file")
 
-if not os.getenv("SCRAPINGBEE_API_KEY"):
-    raise ValueError("SCRAPINGBEE_API_KEY must be set in .env file")
+if not os.getenv("FIRECRAWL_API_KEY"):
+    raise ValueError("FIRECRAWL_API_KEY must be set in .env file")
 
 
 appConfig = {
@@ -43,5 +43,5 @@ appConfig = {
     "aws_access_key_id": os.getenv("AWS_ACCESS_KEY_ID"),
     "redis_url": os.getenv("REDIS_URL"),
     "openai_api_key": os.getenv("OPENAI_API_KEY"),
-    "scrapingbee_api_key": os.getenv("SCRAPINGBEE_API_KEY"),
+    "firecrawl_api_key": os.getenv("FIRECRAWL_API_KEY"),
 }

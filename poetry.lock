@@ -1367,6 +1367,27 @@ files = [
 ]
 
 [[package]]
+name = "firecrawl-py"
+version = "4.22.1"
+description = "Python SDK for Firecrawl API"
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "firecrawl_py-4.22.1-py3-none-any.whl", hash = "sha256:3df92a7888f9d5907a6fbbe50ade330d2925f5bf51f8efa507c2ab9891df9a0a"},
+    {file = "firecrawl_py-4.22.1.tar.gz", hash = "sha256:fb44d4c63ba91c076ae2f0b688f1556327c971baea45e7fb67d6ed5d393542a2"},
+]
+
+[package.dependencies]
+aiohttp = "*"
+httpx = "*"
+nest-asyncio = "*"
+pydantic = ">=2.0"
+python-dotenv = "*"
+requests = "*"
+websockets = "*"
+
+[[package]]
 name = "flatbuffers"
 version = "25.12.19"
 description = "The FlatBuffers serialization format for Python"
@@ -6689,21 +6710,6 @@ doc = ["intersphinx_registry", "jupyterlite-pyodide-kernel", "jupyterlite-sphinx
 test = ["Cython", "array-api-strict (>=2.3.1)", "asv", "gmpy2", "hypothesis (>=6.30)", "meson", "mpmath", "ninja ; sys_platform != \"emscripten\"", "pooch", "pytest (>=8.0.0)", "pytest-cov", "pytest-timeout", "pytest-xdist", "scikit-umfpack", "threadpoolctl"]
 
 [[package]]
-name = "scrapingbee"
-version = "2.0.2"
-description = "ScrapingBee Python SDK"
-optional = false
-python-versions = ">=3.8"
-groups = ["main"]
-files = [
-    {file = "scrapingbee-2.0.2-py3-none-any.whl", hash = "sha256:28d1c9b250917e45924d8a21cf7d55776c701d6d1c5283aabf3ef1911462a291"},
-    {file = "scrapingbee-2.0.2.tar.gz", hash = "sha256:312a2f2beab03eb687e568c3688533c44e543104eea82f18a4183f9ce1042e0f"},
-]
-
-[package.dependencies]
-requests = "*"
-
-[[package]]
 name = "setuptools"
 version = "81.0.0"
 description = "Easily download, build, install, upgrade, and uninstall Python packages"
@@ -8563,4 +8569,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<4.0"
-content-hash = "afcf1efb2cf75eec70f548f971396449cc5c49a13afe4577d0ec83cd1dbe9284"
+content-hash = "4e561b66a27ed63a831cf8327a38167fe27aba63ead0c07e701efce93766ae9f"

@@ -234,11 +234,11 @@ async def get_project_settings(
             )
 
         logger.info("project_settings_retrieved",
-            rag_strategy=settings_result.get("rag_strategy"),
-            agent_type=settings_result.get("agent_type"),
-            embedding_model=settings_result.get("embedding_model"),
-            final_context_size=settings_result.get("final_context_size"),
-            reranking_enabled=settings_result.get("reranking_enabled")
+            rag_strategy=settings_result.data[0].get("rag_strategy"),
+            agent_type=settings_result.data[0].get("agent_type"),
+            embedding_model=settings_result.data[0].get("embedding_model"),
+            final_context_size=settings_result.data[0].get("final_context_size"),
+            reranking_enabled=settings_result.data[0].get("reranking_enabled")
         )
         return {
             "success": True,
@@ -453,6 +453,9 @@ async def stream_message(
     message: SendMessageRequest,
     clerk_id: str = Query(..., description="Clerk user ID"),
 ):
+    set_project_id(project_id)  
+    set_user_id(clerk_id)  
+
     async def event_generator():
         try:
             logger.info("sending_message", chat_id=chat_id)
@@ -512,6 +515,7 @@ async def stream_message(
             citations = []
             
             # Track state to know when we're in the final response
+            passed_guardrail = False
             tool_called = False
             is_final_response = False
             
@@ -523,9 +527,23 @@ async def stream_message(
                 tags = event.get("tags", [])
                 name = event.get("name", "")
                 
+                # Detect guardrail completion
+                if kind == "on_chain_end" and name == "guardrail":
+                    # Check if guardrail rejected the input
+                    output = event.get("data", {}).get("output", {})
+                    if output.get("guardrail_passed") == False:
+                        # Stream the rejection message
+                        messages = output.get("messages", [])
+                        if messages:
+                            rejection_content = messages[0].content if hasattr(messages[0], 'content') else str(messages[0])
+                            full_response = rejection_content
+                            yield f"event: token\ndata: {json.dumps({'content': rejection_content})}\n\n"
+                    else:
+                        passed_guardrail = True
+                        yield f"event: status\ndata: {json.dumps({'status': 'Thinking...'})}\n\n"
 
                 # Status updates for tool calls
-                if kind == "on_tool_start":
+                elif kind == "on_tool_start":
                     tool_called = True
                     tool_name = name
                     if tool_name == "rag_search":
@@ -541,9 +559,10 @@ async def stream_message(
                 # Stream tokens from the model
                 elif kind == "on_chat_model_stream":
                     # Stream if:
+                    # Guardrail passed
                     # Either tool finished OR no tool was called yet AND
                     # Has the seq:step:1 tag (part of main agent flow, not nested LLM)
-                    if (is_final_response or not tool_called) and 'seq:step:1' in tags:
+                    if passed_guardrail and (is_final_response or not tool_called) and 'seq:step:1' in tags:
                         chunk = event["data"].get("chunk")
                         if chunk:
                             content = chunk.content if hasattr(chunk, 'content') else ""

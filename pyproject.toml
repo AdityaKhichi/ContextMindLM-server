@@ -19,14 +19,14 @@ dependencies = [
     "langchain-community (==0.4.1)",
     "langchain-openai (==1.0.3)",
     "unstructured[all-docs] (==0.18.11)",
-    "scrapingbee (>=2.0.2,<3.0.0)",
     "ipykernel (>=7.2.0,<8.0.0)",
     "langgraph (==1.0.2)",
     "ddgs (>=9.9.1,<10.0.0)",
     "langchain-tavily (>=0.2.13,<0.3.0)",
     "torch",
     "torchvision",
-    "structlog (>=25.5.0,<26.0.0)"
+    "structlog (>=25.5.0,<26.0.0)",
+    "firecrawl-py (>=4.22.1,<5.0.0)"
 ]
 
 [[tool.poetry.source]]

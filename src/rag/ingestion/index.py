@@ -7,7 +7,7 @@ from src.models.index import ProcessingStatus
 from src.config.index import appConfig
 
 from src.services.supabase import supabase
-from src.services.webScrapper import scrapingbee_client
+from src.services.webScrapper import firecrawl_client
 from src.services.llm import openAI
 from src.services.awsS3 import s3_client
 
@@ -113,7 +113,7 @@ def process_document(document_id: str):
             )
         
         document = doc_result.data[0]
-        source_type = document.get('source_type', 'file')
+        set_project_id(document["project_id"])
         logger.info("document_retrieved", document_id=document_id, source_type=document.get("source_type"))
 
         # step 1: Download and partition 
@@ -177,12 +177,12 @@ def download_and_partition(document_id: str, document: dict):
             
             # Fetch content with ScrapingBee
             logger.info("crawling_url", document_id=document_id, url=url)
-            response = scrapingbee_client.get(url)
+            response = firecrawl_client.scrape(url, formats=["html"])
             
             # Save to temp file
             temp_file = os.path.join( tempfile.gettempdir(), f"{document_id}.html" )
-            with open(temp_file, 'wb') as f:
-                f.write(response.content)
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                f.write(response.html)
             logger.info("url_crawl_completed", document_id=document_id)
             
             elements = partition_document(temp_file, "html", source_type="url")

@@ -1,4 +1,4 @@
-from scrapingbee import ScrapingBeeClient
+from firecrawl import Firecrawl
 from src.config.index import appConfig
 
-scrapingbee_client = ScrapingBeeClient(api_key=appConfig["scrapingbee_api_key"])
+firecrawl_client = Firecrawl(api_key=appConfig["firecrawl_api_key"])
