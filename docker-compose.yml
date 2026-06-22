@@ -34,10 +34,7 @@ services:
     image: contextmind-lm:1.0.0
     env_file:
       - .env
-    command: >
-      celery -A src.services.celery:celery_app worker
-      --loglevel=info
-      --pool=threads
+    command: celery -A src.services.celery:celery_app worker --loglevel=info --pool=threads
     restart: unless-stopped
     depends_on:
       redis:

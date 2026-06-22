@@ -141,7 +141,7 @@ def process_document(document_id: str):
         })
 
         # step 3: Summarising chunks
-        processed_chunks = summarise_chunks(chunks, document_id, source_type)
+        processed_chunks = summarise_chunks(chunks, document_id)
         logger.info("summarization_completed", document_id=document_id, chunks_count=len(processed_chunks))
 
         # step 4: Vectorization & storing
@@ -167,52 +167,82 @@ def process_document(document_id: str):
 
 
 def download_and_partition(document_id: str, document: dict):
-    
+    temp_files = []
+
     try:
         source_type = document.get("source_type", "file")
 
         if source_type == "url":
-            # Crawl URL 
-            url = document["source_url"] 
-            
-            # Fetch content with ScrapingBee
+            url = document["source_url"]
+
             logger.info("crawling_url", document_id=document_id, url=url)
-            response = firecrawl_client.scrape(url, formats=["html"])
-            
-            # Save to temp file
-            temp_file = os.path.join( tempfile.gettempdir(), f"{document_id}.html" )
-            with open(temp_file, 'w', encoding='utf-8') as f:
-                f.write(response.html)
+
+            response = firecrawl_client.scrape(url, formats=["html", "markdown"])
+
             logger.info("url_crawl_completed", document_id=document_id)
-            
-            elements = partition_document(temp_file, "html", source_type="url")
-            logger.info("elements_analyzed", document_id=document_id, elements_count=len(elements))
+
+            # -------------------------
+            # Try HTML first
+            # -------------------------
+            html_file = os.path.join(tempfile.gettempdir(),f"{document_id}.html")
+            temp_files.append(html_file)
+
+            with open(html_file, "w", encoding="utf-8") as f:
+                f.write(response.html or "")
+
+            try:
+                elements = partition_document(html_file, file_type="html")
+            except Exception as e:
+                logger.exception("html_partition_failed", document_id=document_id, error=str(e))
+                elements = []
+
+            # -------------------------
+            # Fallback to Markdown
+            # -------------------------
+            if len(elements) < 3 and response.markdown:
+                logger.warning("html_partition_failed_falling_back_to_markdown", document_id=document_id)
+
+                md_file = os.path.join(tempfile.gettempdir(), f"{document_id}.md")
+                temp_files.append(md_file)
+
+                with open(md_file, "w", encoding="utf-8") as f:
+                    f.write(response.markdown or "")
+
+                elements = partition_document(md_file, file_type="md")
 
         else:
-            # Handle file processing
             s3_key = document["s3_key"]
             filename = document["filename"]
             file_type = filename.split(".")[-1].lower()
 
-            #  Download to a temporary location 
-            # temp_file = f"/tmp/{document_id}.{file_type}"
-            temp_file = os.path.join( tempfile.gettempdir(), f"{document_id}.{file_type}" )
+            temp_file = os.path.join(tempfile.gettempdir(), f"{document_id}.{file_type}")
+            temp_files.append(temp_file)
 
             logger.info("downloading_from_s3", document_id=document_id, s3_key=s3_key, file_type=file_type)
+
             s3_client.download_file(appConfig["s3_bucket_name"], s3_key, temp_file)
+
             logger.info("s3_download_completed", document_id=document_id)
 
-            elements = partition_document(temp_file, file_type, source_type="file")
-            
-        elements_summary = analyze_elements(elements)
+            elements = partition_document(temp_file, file_type)
 
-        os.remove(temp_file)
+        logger.info("elements_analyzed", document_id=document_id, elements_count=len(elements))
+
+        elements_summary = analyze_elements(elements)
 
         return elements, elements_summary
 
     except Exception as e:
         logger.error("download_and_partition_failed", document_id=document_id, error=str(e), exc_info=True)
         raise Exception(f"Failed in Step 1 to download content and partition elements: {str(e)}")
+
+    finally:
+        for file_path in temp_files:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except Exception:
+                logger.warning("temp_file_cleanup_failed", document_id=document_id, file=file_path)
 
 
 def chunk_elements(elements):
@@ -319,21 +349,21 @@ def store_chunks_with_embeddings(document_id: str, processed_chunks: list):
             batch_num = (i // batch_size) + 1
             total_batches = (len(texts) + batch_size - 1) // batch_size
 
-         # Retry with exponential backoff
-        attempt = 0
-        while True:
-            try:
-                batch_embeddings = openAI["embeddings"].embed_documents(batch_texts)
-                all_embeddings.extend(batch_embeddings)
-                logger.info("batch_vectorized", document_id=document_id, batch=f"{batch_num}/{total_batches}", chunks_in_batch=len(batch_texts))
-                break
-            except Exception as e:
-                attempt += 1
-                if attempt >= 3:
-                    logger.error("vectorization_batch_failed", document_id=document_id, batch=batch_num, attempt=attempt, error=str(e), exc_info=True)
-                    raise e
-                logger.warning("vectorization_retry", document_id=document_id, batch=batch_num, attempt=attempt, wait_seconds=2 ** attempt)
-                time.sleep(2 ** attempt)
+            # Retry with exponential backoff
+            attempt = 0
+            while True:
+                try:
+                    batch_embeddings = openAI["embeddings"].embed_documents(batch_texts)
+                    all_embeddings.extend(batch_embeddings)
+                    logger.info("batch_vectorized", document_id=document_id, batch=f"{batch_num}/{total_batches}", chunks_in_batch=len(batch_texts))
+                    break
+                except Exception as e:
+                    attempt += 1
+                    if attempt >= 3:
+                        logger.error("vectorization_batch_failed", document_id=document_id, batch=batch_num, attempt=attempt, error=str(e), exc_info=True)
+                        raise e
+                    logger.warning("vectorization_retry", document_id=document_id, batch=batch_num, attempt=attempt, wait_seconds=2 ** attempt)
+                    time.sleep(2 ** attempt)
         
         # Store chunks with embeddings
         stored_chunk_ids = []

@@ -117,9 +117,9 @@ def create_ai_summary(text, tables_html, images_base64):
         print(f" AI summary failed: {e}")
 
 
-def partition_document(temp_file: str, file_type: str, source_type: str = "file"):
+def partition_document(temp_file: str, file_type: str):
 
-    if source_type == "url": 
+    if file_type == "html": 
         return partition_html(
             filename=temp_file
         )
